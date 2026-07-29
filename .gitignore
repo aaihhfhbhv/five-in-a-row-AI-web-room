@@ -1,0 +1,19 @@
+# Python缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# AI模型、训练日志（体积大，无需上传）
+ai/models/
+ai/logs/
+
+# VSCode本地配置（可选忽略，不强制）
+.vscode/
+*.swp
+*.swo
+
+# 临时文件、环境
+venv/
+env/
+*.log
