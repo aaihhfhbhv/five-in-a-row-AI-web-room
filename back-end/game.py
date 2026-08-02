@@ -11,6 +11,7 @@ class Board:
         self.current_player = None
         self.available = []
         self.last_move = -1
+        self.last_move_player = 0
         self.history = []
 
     # 粘贴到 Board 类内部任意位置
@@ -549,6 +550,7 @@ class Board:
         self.available = list(range(self.width * self.height))
         self.states = {}
         self.last_move = -1
+        self.last_move_player = 0
         self.history = []
 
     def force_to_state(self, states, current_player, last_move):
@@ -559,6 +561,10 @@ class Board:
             if move in self.available:
                 self.available.remove(move)
         self.last_move = last_move
+        if self.states:
+            self.last_move_player = self.states.get(last_move, 0)
+        else:
+            self.last_move_player = 0
 
     def move_to_location(self, move):
         h = move // self.width
@@ -586,6 +592,7 @@ class Board:
         self.states[move] = player
         self.available.remove(move)
         self.last_move = move
+        self.last_move_player = player
         self.history.append((move, player))
         return True
 
@@ -650,6 +657,7 @@ class Board:
         if move not in self.available:
             self.available.append(move)
         self.last_move = self.history[-1][0] if self.history else -1
+        self.last_move_player = self.history[-1][1] if self.history else 0
         return True, player
 
     def game_end(self):

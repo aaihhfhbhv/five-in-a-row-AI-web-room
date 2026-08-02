@@ -5,6 +5,7 @@ from config import globalV
 from game import Board, Game
 from mcts_alphaZero import MCTSPlayer
 from policy_value_net_pytorch import PolicyValueNet
+from ai_runtime import get_ai_runtime_config
 
 """
 input location as '3,3' to play
@@ -43,8 +44,13 @@ def run(model_name):
         board = Board(width=width, height=height, n_in_row=n)
         game = Game(board)
         # 创建 AI player
+        runtime_cfg = get_ai_runtime_config(width, height)
         best_policy = PolicyValueNet(width, height, model_file=globalV['MODEL_PATH'])
-        mcts_player = MCTSPlayer(best_policy.policy_value_fn, c_puct=5, n_playout=400)
+        mcts_player = MCTSPlayer(
+            best_policy.policy_value_fn,
+            c_puct=runtime_cfg['c_puct'],
+            n_playout=runtime_cfg['n_playout']
+        )
         # 创建 Human player ，输入样例： 2,3
         human = Human()
         # 设置 start_player = 0 可以让人类先手

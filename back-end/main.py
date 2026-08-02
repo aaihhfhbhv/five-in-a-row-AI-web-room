@@ -12,6 +12,7 @@ from mcts_alphaZero import MCTSPlayer
 from policy_value_net_pytorch import PolicyValueNet
 from utils import get_model_path
 from auto_deed import get_auto_move
+from ai_runtime import get_ai_runtime_config
 
 app = Flask(__name__, static_folder='static')
 CORS(app, supports_credentials=True)
@@ -35,15 +36,16 @@ def clear_timeout_room():
 policy = None
 mcts_player = None
 try:
+    default_cfg = get_ai_runtime_config(CONFIG['BOARD_WIDTH'], CONFIG['BOARD_HEIGHT'])
     policy = PolicyValueNet(
         CONFIG['BOARD_WIDTH'],
         CONFIG['BOARD_HEIGHT'],
-        get_model_path(CONFIG['MODEL_NAME'])
+        get_model_path(default_cfg['model_name'])
     )
     mcts_player = MCTSPlayer(
         policy.policy_value_fn,
-        c_puct=CONFIG['C_PUCT'],
-        n_playout=CONFIG['N_PLAYOUT']
+        c_puct=default_cfg['c_puct'],
+        n_playout=default_cfg['n_playout']
     )
 except Exception as e:
     print('Warning: failed to initialize global PolicyValueNet/MCTSPlayer:', e)
@@ -61,10 +63,8 @@ class AiChess(Resource):
             height = int(data.get('height', CONFIG['BOARD_HEIGHT']))
             model_name = data.get('model_name')
             if not model_name:
-                if width == 15 and height == 15:
-                    model_name = '202202281205_15_15_5_1.0_5_400'
-                else:
-                    model_name = CONFIG.get('MODEL_NAME')
+                runtime_cfg = get_ai_runtime_config(width, height)
+                model_name = runtime_cfg['model_name']
 
             board = Board(
                 width=width,
@@ -73,10 +73,11 @@ class AiChess(Resource):
             )
             board.force_to_state(states, 3 - player, last_move)
 
-            policy_tmp = PolicyValueNet(width, height, get_model_path(model_name))
+            runtime_cfg = get_ai_runtime_config(width, height)
+            policy_tmp = PolicyValueNet(width, height, get_model_path(model_name or runtime_cfg['model_name']))
             mcts_tmp = MCTSPlayer(policy_tmp.policy_value_fn,
-                                  c_puct=CONFIG['C_PUCT'],
-                                  n_playout=CONFIG['N_PLAYOUT'])
+                                  c_puct=runtime_cfg['c_puct'],
+                                  n_playout=runtime_cfg['n_playout'])
             move = mcts_tmp.get_action(board)
             return {"move": int(move)}, 200
         except Exception as e:
@@ -228,6 +229,35 @@ def calc_ai_point(over_pos, board_size, info_tag):
         if ret[0] != 0:
             return ret[0]
     return []
+
+
+def _normalize_ai_move(move, width, height):
+    if move is None:
+        return -1
+    if isinstance(move, tuple):
+        move = move[0]
+    if isinstance(move, (list, tuple)):
+        if len(move) != 2:
+            return -1
+        row, col = int(move[0]), int(move[1])
+        if 0 <= row < height and 0 <= col < width:
+            return row * width + col
+        return -1
+    move = int(move)
+    if 0 <= move < width * height:
+        return move
+    return -1
+
+
+def _pick_legal_move(board, width, height, preferred_move):
+    if preferred_move in board.available:
+        return preferred_move
+    if not board.available:
+        return -1
+    return min(
+        board.available,
+        key=lambda move: abs((move // width) - (height // 2)) + abs((move % width) - (width // 2))
+    )
         
 def find_pos(x, y):
     for i in range(27, 670, 44):
@@ -282,41 +312,46 @@ class AutoPlayMove(Resource):
         try:
             room["auto_play_calculating"] = True
 
-            over_pos_list = []
-            for idx, color in board_states.items():
-                r, c = divmod(idx, width)
-                if width == 15 and height == 15 and 0 <= r < 15 and 0 <= c < 15:
-                    px = (c - 1) * 44 + 27
-                    py = (r - 1) * 44 + 27
-                    over_pos_list.append([[px, py], color])
-            if not over_pos_list:
-                mid_r = height // 2
-                mid_c = width // 2
-                target_move = mid_r * width + mid_c
-                return {"code": 200, "move": target_move}, 200
             if width == 15 and height == 15:
+                if not board_states:
+                    mid_r = height // 2
+                    mid_c = width // 2
+                    target_move = mid_r * width + mid_c
+                    return {"code": 200, "move": target_move}, 200
+
+                over_pos_list = []
+                for idx, color in board_states.items():
+                    r, c = divmod(idx, width)
+                    if 0 <= r < 15 and 0 <= c < 15:
+                        px = c * 44 + 27
+                        py = r * 44 + 27
+                        over_pos_list.append([[px, py], color])
+
                 info_tag = "h" if player_flag == 1 else "b"
                 coord_result = calc_ai_point(over_pos_list, width, info_tag)
                 print(f"【AI计算】房间:{room_id}，玩家:{client_id}，棋盘尺寸:{width}x{height}，落子点位:{coord_result}")
                 if not coord_result:
                     return {"code": 400, "msg": "暂无合适落子点位"}, 400
-                best_r, best_c = coord_result
-                target_move = best_r * width + best_c
+                target_move = _normalize_ai_move(coord_result, width, height)
+                target_move = _pick_legal_move(room["board"], width, height, target_move)
+                if target_move < 0:
+                    return {"code": 400, "msg": "当前棋盘已无可用落子点"}, 400
             else:
-                # 8x8分支修复
                 global policy, mcts_player
-                # 校验全局模型是否加载成功
                 if mcts_player is None:
                     return {"code": 500, "msg": "AI模型加载失败，无法自动落子"}, 500
 
-                mcts_player_num = player_flag
+                mcts_player_num = current_player
                 last_move = room["board"].last_move
 
-                # 新建独立棋盘，不污染房间原棋盘
                 temp_board = Board(width=width, height=height, n_in_row=CONFIG['N_IN_ROW'])
-                temp_board.force_to_state(board_states, 3 - mcts_player_num, last_move)
+                temp_board.force_to_state(board_states, mcts_player_num, last_move)
 
                 target_move = mcts_player.get_action(temp_board)
+                target_move = _normalize_ai_move(target_move, width, height)
+                target_move = _pick_legal_move(room["board"], width, height, target_move)
+                if target_move < 0:
+                    return {"code": 400, "msg": "当前棋盘已无可用落子点"}, 400
                 print(f"【MCTS-AI计算】房间:{room_id}，玩家:{client_id}，棋盘尺寸:{width}x{height}，落子move:{target_move}")
         finally:
             room["auto_play_calculating"] = False
@@ -427,6 +462,7 @@ class UndoReply(Resource):
             room["last_move"] = room["board"].last_move
             room["last_move_player"] = room["board"].last_move_player
             room["can_undo"] = False
+            room["pending_undo_request"] = None
 
         states = {idx: val for idx, val in room["board"].states.items()}
         return {
